@@ -1,0 +1,25 @@
+# Pintos build directories
+build/
+*/build/
+*/*/build/
+
+# Object and dependency files
+*.o
+*.d
+*.bin
+
+# Test output and logs
+*.result
+*.output
+*.log
+
+# Editor configs
+.vscode/
+
+# zip
+*.zip
+
+# documents
+*.pdf
+*.docx
+*.pptx
