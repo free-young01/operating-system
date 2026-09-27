@@ -1,6 +1,7 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "lib/kernel/stdio.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
@@ -13,8 +14,29 @@ syscall_init (void)
 }
 
 static void
-syscall_handler (struct intr_frame *f UNUSED) 
+syscall_handler (struct intr_frame *f)
 {
-  printf ("system call!\n");
-  thread_exit ();
+  uint32_t *args = f->esp;
+
+  switch (args[0])
+    {
+    case SYS_EXIT:
+      printf ("%s: exit(%d)\n", thread_name (), (int) args[1]);
+      thread_exit ();
+      break;
+
+    case SYS_WRITE:
+      if ((int) args[1] == 1)
+        {
+          putbuf ((const char *) args[2], args[3]);
+          f->eax = args[3];
+        }
+      else
+        f->eax = -1;
+      break;
+
+    default:
+      thread_exit ();
+      break;
+    }
 }
