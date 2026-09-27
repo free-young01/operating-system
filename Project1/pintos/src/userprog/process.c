@@ -14,7 +14,9 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
@@ -24,6 +26,27 @@ static bool setup_stack (void **esp, char *cmdline);
 
 #define MAX_ARGS 128
 
+/* Information shared by a parent and one child.  The parent owns one
+   reference while the record is on its children list; the child owns the
+   other until it exits. */
+struct child_process
+  {
+    tid_t tid;
+    int exit_status;
+    int references;
+    struct semaphore exited;
+    struct list_elem elem;
+  };
+
+/* Arguments needed only while a new thread enters start_process(). */
+struct start_process_info
+  {
+    char *cmdline;
+    struct child_process *child;
+  };
+
+static void child_process_release (struct child_process *child);
+
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -32,6 +55,8 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  struct child_process *child;
+  struct start_process_info *start_info;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -41,10 +66,37 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  child = malloc (sizeof *child);
+  start_info = malloc (sizeof *start_info);
+  if (child == NULL || start_info == NULL)
+    {
+      if (child != NULL)
+        free (child);
+      if (start_info != NULL)
+        free (start_info);
+      palloc_free_page (fn_copy);
+      return TID_ERROR;
+    }
+
+  child->tid = TID_ERROR;
+  child->exit_status = -1;
+  child->references = 2;
+  sema_init (&child->exited, 0);
+  start_info->cmdline = fn_copy;
+  start_info->child = child;
+  list_push_back (&thread_current ()->children, &child->elem);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, start_info);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    {
+      list_remove (&child->elem);
+      free (start_info);
+      palloc_free_page (fn_copy);
+      free (child);
+    }
+  else
+    child->tid = tid;
   return tid;
 }
 
@@ -53,9 +105,13 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  struct start_process_info *start_info = file_name_;
+  char *file_name = start_info->cmdline;
   struct intr_frame if_;
   bool success;
+
+  thread_current ()->child_info = start_info->child;
+  free (start_info);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -86,12 +142,36 @@ start_process (void *file_name_)
    been successfully called for the given TID, returns -1
    immediately, without waiting.
 
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   This function may wait only once for each child. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid)
 {
-  return -1;
+  struct thread *cur = thread_current ();
+  struct list_elem *e;
+  struct child_process *child = NULL;
+  int exit_status;
+
+  for (e = list_begin (&cur->children); e != list_end (&cur->children);
+       e = list_next (e))
+    {
+      struct child_process *candidate =
+        list_entry (e, struct child_process, elem);
+      if (candidate->tid == child_tid)
+        {
+          child = candidate;
+          break;
+        }
+    }
+
+  if (child == NULL)
+    return -1;
+
+  /* Removing the record first makes a second wait fail immediately. */
+  list_remove (&child->elem);
+  sema_down (&child->exited);
+  exit_status = child->exit_status;
+  child_process_release (child);
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -100,6 +180,14 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+  struct list_elem *e;
+
+  /* A parent that exits cannot wait for any remaining children. */
+  while (!list_empty (&cur->children))
+    {
+      e = list_pop_front (&cur->children);
+      child_process_release (list_entry (e, struct child_process, elem));
+    }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -117,6 +205,33 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  /* Publish this child's status after its user address space is gone, then
+     wake a parent that is blocked in process_wait(). */
+  if (cur->child_info != NULL)
+    {
+      cur->child_info->exit_status = cur->exit_status;
+      sema_up (&cur->child_info->exited);
+      child_process_release (cur->child_info);
+      cur->child_info = NULL;
+    }
+}
+
+/* Drops one ownership reference and frees CHILD after both the parent and
+   child are done with it. */
+static void
+child_process_release (struct child_process *child)
+{
+  enum intr_level old_level;
+  bool free_child;
+
+  old_level = intr_disable ();
+  child->references--;
+  free_child = child->references == 0;
+  intr_set_level (old_level);
+
+  if (free_child)
+    free (child);
 }
 
 /* Sets up the CPU for running user code in the current

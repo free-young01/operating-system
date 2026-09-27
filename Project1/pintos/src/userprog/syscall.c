@@ -21,7 +21,9 @@ syscall_handler (struct intr_frame *f)
   switch (args[0])
     {
     case SYS_EXIT:
-      printf ("%s: exit(%d)\n", thread_name (), (int) args[1]);
+      thread_current ()->exit_status = (int) args[1];
+      printf ("%s: exit(%d)\n", thread_name (),
+              thread_current ()->exit_status);
       thread_exit ();
       break;
 

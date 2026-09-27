@@ -19,6 +19,8 @@ enum thread_status
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
+struct child_process;
+
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
@@ -96,6 +98,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct list children;                /* Child process records. */
+    struct child_process *child_info;    /* Record owned by this child. */
+    int exit_status;                     /* Status reported to the parent. */
 #endif
 
     /* Owned by thread.c. */
