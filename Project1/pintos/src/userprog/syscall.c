@@ -1,17 +1,30 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 #include <syscall-nr.h>
 #include "devices/input.h"
 #include "devices/shutdown.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "lib/kernel/stdio.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
+
+/* File descriptors belong to one process; the file system is shared. */
+struct file_descriptor
+  {
+    int fd;
+    struct file *file;
+    struct list_elem elem;
+  };
 
 static void syscall_handler (struct intr_frame *);
 static void exit_with_status (int status) NO_RETURN;
@@ -20,11 +33,61 @@ static void validate_user_buffer (const void *buffer, size_t size,
 static uint32_t read_user_argument (const struct intr_frame *f,
                                     unsigned index);
 static char *copy_user_string (const char *source);
+static struct file_descriptor *find_file_descriptor (int fd);
+
+static struct lock filesys_lock;
 
 void
 syscall_init (void) 
 {
+  lock_init (&filesys_lock);
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+}
+
+void
+filesys_lock_acquire (void)
+{
+  lock_acquire (&filesys_lock);
+}
+
+void
+filesys_lock_release (void)
+{
+  lock_release (&filesys_lock);
+}
+
+/* Find FD in the current process only. */
+static struct file_descriptor *
+find_file_descriptor (int fd)
+{
+  struct list *files = &thread_current ()->open_files;
+  struct list_elem *e;
+
+  for (e = list_begin (files); e != list_end (files); e = list_next (e))
+    {
+      struct file_descriptor *descriptor =
+        list_entry (e, struct file_descriptor, elem);
+      if (descriptor->fd == fd)
+        return descriptor;
+    }
+  return NULL;
+}
+
+/* A process also closes descriptors it forgot to close explicitly. */
+void
+syscall_close_all (void)
+{
+  struct list *files = &thread_current ()->open_files;
+
+  filesys_lock_acquire ();
+  while (!list_empty (files))
+    {
+      struct file_descriptor *descriptor =
+        list_entry (list_pop_front (files), struct file_descriptor, elem);
+      file_close (descriptor->file);
+      free (descriptor);
+    }
+  filesys_lock_release ();
 }
 
 /* Report the exit status to the parent and stop this process. */
@@ -141,6 +204,90 @@ syscall_handler (struct intr_frame *f)
 
     case SYS_WAIT:
       f->eax = process_wait ((tid_t) read_user_argument (f, 1));
+      break;
+
+    case SYS_CREATE:
+      {
+        const char *source = (const char *) read_user_argument (f, 1);
+        unsigned initial_size = read_user_argument (f, 2);
+        char *name = copy_user_string (source);
+
+        f->eax = false;
+        if (name != NULL && initial_size <= INT_MAX)
+          {
+            filesys_lock_acquire ();
+            f->eax = filesys_create (name, initial_size);
+            filesys_lock_release ();
+          }
+        if (name != NULL)
+          palloc_free_page (name);
+      }
+      break;
+
+    case SYS_REMOVE:
+      {
+        const char *source = (const char *) read_user_argument (f, 1);
+        char *name = copy_user_string (source);
+
+        f->eax = false;
+        if (name != NULL)
+          {
+            filesys_lock_acquire ();
+            f->eax = filesys_remove (name);
+            filesys_lock_release ();
+            palloc_free_page (name);
+          }
+      }
+      break;
+
+    case SYS_OPEN:
+      {
+        const char *source = (const char *) read_user_argument (f, 1);
+        char *name = copy_user_string (source);
+        struct file_descriptor *descriptor = NULL;
+        struct file *file = NULL;
+        struct thread *cur = thread_current ();
+
+        f->eax = -1;
+        if (name == NULL)
+          break;
+        descriptor = malloc (sizeof *descriptor);
+        if (descriptor != NULL)
+          {
+            filesys_lock_acquire ();
+            file = filesys_open (name);
+            if (file != NULL && cur->next_fd < INT_MAX)
+              {
+                descriptor->fd = cur->next_fd++;
+                descriptor->file = file;
+                list_push_back (&cur->open_files, &descriptor->elem);
+                f->eax = descriptor->fd;
+              }
+            else
+              {
+                file_close (file);
+                free (descriptor);
+              }
+            filesys_lock_release ();
+          }
+        palloc_free_page (name);
+      }
+      break;
+
+    case SYS_CLOSE:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        struct file_descriptor *descriptor = find_file_descriptor (fd);
+
+        if (descriptor != NULL)
+          {
+            list_remove (&descriptor->elem);
+            filesys_lock_acquire ();
+            file_close (descriptor->file);
+            filesys_lock_release ();
+            free (descriptor);
+          }
+      }
       break;
 
     case SYS_READ:

@@ -101,6 +101,8 @@ struct thread
     struct list children;                /* Child process records. */
     struct child_process *child_info;    /* Record owned by this child. */
     int exit_status;                     /* Status reported to the parent. */
+    struct list open_files;              /* This process's file descriptors. */
+    int next_fd;                         /* Next descriptor, starting at 2. */
 #endif
 
     /* Owned by thread.c. */

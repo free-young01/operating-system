@@ -467,6 +467,8 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init (&t->children);
   t->child_info = NULL;
   t->exit_status = -1;
+  list_init (&t->open_files);
+  t->next_fd = 2;
 #endif
   t->magic = THREAD_MAGIC;
 
