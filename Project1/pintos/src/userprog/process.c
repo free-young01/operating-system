@@ -34,6 +34,8 @@ struct child_process
     tid_t tid;
     int exit_status;
     int references;
+    bool load_success;
+    struct semaphore loaded;
     struct semaphore exited;
     struct list_elem elem;
   };
@@ -48,9 +50,8 @@ struct start_process_info
 static void child_process_release (struct child_process *child);
 
 /* Starts a new thread running a user program loaded from
-   FILENAME.  The new thread may be scheduled (and may even exit)
-   before process_execute() returns.  Returns the new process's
-   thread id, or TID_ERROR if the thread cannot be created. */
+   FILENAME.  Returns its thread id after loading succeeds, or
+   TID_ERROR if the thread cannot be created or loading fails. */
 tid_t
 process_execute (const char *file_name) 
 {
@@ -81,6 +82,8 @@ process_execute (const char *file_name)
   child->tid = TID_ERROR;
   child->exit_status = -1;
   child->references = 2;
+  child->load_success = false;
+  sema_init (&child->loaded, 0);
   sema_init (&child->exited, 0);
   start_info->cmdline = fn_copy;
   start_info->child = child;
@@ -96,7 +99,17 @@ process_execute (const char *file_name)
       free (child);
     }
   else
-    child->tid = tid;
+    {
+      child->tid = tid;
+      /* exec() succeeds only after the child has loaded its executable. */
+      sema_down (&child->loaded);
+      if (!child->load_success)
+        {
+          list_remove (&child->elem);
+          child_process_release (child);
+          return TID_ERROR;
+        }
+    }
   return tid;
 }
 
@@ -119,6 +132,10 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+
+  /* The parent may return from exec() only after load() has finished. */
+  thread_current ()->child_info->load_success = success;
+  sema_up (&thread_current ()->child_info->loaded);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);

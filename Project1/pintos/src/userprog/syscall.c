@@ -3,17 +3,23 @@
 #include <stdint.h>
 #include <string.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
+#include "devices/shutdown.h"
 #include "lib/kernel/stdio.h"
 #include "threads/interrupt.h"
+#include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 
 static void syscall_handler (struct intr_frame *);
 static void exit_with_status (int status) NO_RETURN;
-static void validate_user_buffer (const void *buffer, size_t size);
+static void validate_user_buffer (const void *buffer, size_t size,
+                                  bool writable);
 static uint32_t read_user_argument (const struct intr_frame *f,
                                     unsigned index);
+static char *copy_user_string (const char *source);
 
 void
 syscall_init (void) 
@@ -33,7 +39,7 @@ exit_with_status (int status)
 /* Check every page touched by a user buffer before the kernel reads it.
    The end check also rejects ranges that wrap around or enter kernel space. */
 static void
-validate_user_buffer (const void *buffer, size_t size)
+validate_user_buffer (const void *buffer, size_t size, bool writable)
 {
   uintptr_t first = (uintptr_t) buffer;
   uintptr_t last;
@@ -49,9 +55,13 @@ validate_user_buffer (const void *buffer, size_t size)
 
   for (address = first; address <= last;
        address = (address & ~(uintptr_t) PGMASK) + PGSIZE)
-    if (pagedir_get_page (thread_current ()->pagedir,
-                          (const void *) address) == NULL)
-      exit_with_status (-1);
+    {
+      const void *page_address = (const void *) address;
+      uint32_t *pd = thread_current ()->pagedir;
+      if (pagedir_get_page (pd, page_address) == NULL
+          || (writable && !pagedir_is_writable (pd, page_address)))
+        exit_with_status (-1);
+    }
 }
 
 /* Read one 32-bit syscall word, including words crossing a page boundary. */
@@ -65,9 +75,39 @@ read_user_argument (const struct intr_frame *f, unsigned index)
   if (index > (UINTPTR_MAX - stack) / sizeof value)
     exit_with_status (-1);
   source = (const void *) (stack + index * sizeof value);
-  validate_user_buffer (source, sizeof value);
+  validate_user_buffer (source, sizeof value, false);
   memcpy (&value, source, sizeof value);
   return value;
+}
+
+/* Copy a null-terminated command line into a kernel-owned page. */
+static char *
+copy_user_string (const char *source)
+{
+  char *copy = palloc_get_page (0);
+  uintptr_t first = (uintptr_t) source;
+  size_t i;
+
+  if (copy == NULL)
+    return NULL;
+
+  for (i = 0; i < PGSIZE; i++)
+    {
+      uintptr_t address = first + i;
+      if (address < first || address >= (uintptr_t) PHYS_BASE
+          || pagedir_get_page (thread_current ()->pagedir,
+                               (const void *) address) == NULL)
+        {
+          palloc_free_page (copy);
+          exit_with_status (-1);
+        }
+      copy[i] = *(const char *) address;
+      if (copy[i] == '\0')
+        return copy;
+    }
+
+  palloc_free_page (copy);
+  return NULL;
 }
 
 static void
@@ -77,8 +117,49 @@ syscall_handler (struct intr_frame *f)
 
   switch (call)
     {
+    case SYS_HALT:
+      shutdown_power_off ();
+      break;
+
     case SYS_EXIT:
       exit_with_status ((int) read_user_argument (f, 1));
+      break;
+
+    case SYS_EXEC:
+      {
+        const char *source = (const char *) read_user_argument (f, 1);
+        char *cmdline = copy_user_string (source);
+        if (cmdline == NULL)
+          f->eax = -1;
+        else
+          {
+            f->eax = process_execute (cmdline);
+            palloc_free_page (cmdline);
+          }
+      }
+      break;
+
+    case SYS_WAIT:
+      f->eax = process_wait ((tid_t) read_user_argument (f, 1));
+      break;
+
+    case SYS_READ:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        uint8_t *buffer = (uint8_t *) read_user_argument (f, 2);
+        unsigned size = read_user_argument (f, 3);
+        unsigned i;
+
+        validate_user_buffer (buffer, size, true);
+        if (fd == 0)
+          {
+            for (i = 0; i < size; i++)
+              buffer[i] = input_getc ();
+            f->eax = size;
+          }
+        else
+          f->eax = -1;
+      }
       break;
 
     case SYS_WRITE:
@@ -87,7 +168,7 @@ syscall_handler (struct intr_frame *f)
         const void *buffer = (const void *) read_user_argument (f, 2);
         unsigned size = read_user_argument (f, 3);
 
-        validate_user_buffer (buffer, size);
+        validate_user_buffer (buffer, size, false);
         if (fd == 1)
           {
             putbuf (buffer, size);
