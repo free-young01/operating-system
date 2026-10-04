@@ -208,6 +208,13 @@ process_exit (void)
     }
 
   syscall_close_all ();
+  if (cur->executable != NULL)
+    {
+      filesys_lock_acquire ();
+      file_close (cur->executable);
+      filesys_lock_release ();
+      cur->executable = NULL;
+    }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -386,6 +393,7 @@ load (char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -472,7 +480,10 @@ load (char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   if (file_lock_held)
     {
-      file_close (file);
+      if (success)
+        t->executable = file;
+      else
+        file_close (file);
       filesys_lock_release ();
     }
   if (file_name_copy != NULL)

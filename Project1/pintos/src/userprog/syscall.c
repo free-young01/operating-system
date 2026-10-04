@@ -290,6 +290,21 @@ syscall_handler (struct intr_frame *f)
       }
       break;
 
+    case SYS_FILESIZE:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        struct file_descriptor *descriptor = find_file_descriptor (fd);
+
+        f->eax = -1;
+        if (descriptor != NULL)
+          {
+            filesys_lock_acquire ();
+            f->eax = file_length (descriptor->file);
+            filesys_lock_release ();
+          }
+      }
+      break;
+
     case SYS_READ:
       {
         int fd = (int) read_user_argument (f, 1);
@@ -305,7 +320,16 @@ syscall_handler (struct intr_frame *f)
             f->eax = size;
           }
         else
-          f->eax = -1;
+          {
+            struct file_descriptor *descriptor = find_file_descriptor (fd);
+            f->eax = -1;
+            if (descriptor != NULL && size <= INT_MAX)
+              {
+                filesys_lock_acquire ();
+                f->eax = file_read (descriptor->file, buffer, size);
+                filesys_lock_release ();
+              }
+          }
       }
       break;
 
@@ -322,7 +346,96 @@ syscall_handler (struct intr_frame *f)
             f->eax = size;
           }
         else
-          f->eax = -1;
+          {
+            struct file_descriptor *descriptor = find_file_descriptor (fd);
+            f->eax = -1;
+            if (descriptor != NULL && size <= INT_MAX)
+              {
+                filesys_lock_acquire ();
+                f->eax = file_write (descriptor->file, buffer, size);
+                filesys_lock_release ();
+              }
+          }
+      }
+      break;
+
+    case SYS_SEEK:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        unsigned position = read_user_argument (f, 2);
+        struct file_descriptor *descriptor = find_file_descriptor (fd);
+
+        if (descriptor != NULL && position <= INT_MAX)
+          {
+            filesys_lock_acquire ();
+            file_seek (descriptor->file, position);
+            filesys_lock_release ();
+          }
+      }
+      break;
+
+    case SYS_TELL:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        struct file_descriptor *descriptor = find_file_descriptor (fd);
+
+        f->eax = -1;
+        if (descriptor != NULL)
+          {
+            filesys_lock_acquire ();
+            f->eax = file_tell (descriptor->file);
+            filesys_lock_release ();
+          }
+      }
+      break;
+
+    case SYS_FIBONACCI:
+      {
+        int n = (int) read_user_argument (f, 1);
+        int previous = 0;
+        int current = 1;
+        int next;
+        int i;
+
+        if (n < 0)
+          {
+            f->eax = -1;
+            break;
+          }
+        if (n == 0)
+          {
+            f->eax = 0;
+            break;
+          }
+        for (i = 2; i <= n; i++)
+          {
+            if (previous > INT_MAX - current)
+              {
+                f->eax = -1;
+                break;
+              }
+            next = previous + current;
+            previous = current;
+            current = next;
+          }
+        if (i > n)
+          f->eax = current;
+      }
+      break;
+
+    case SYS_MAX_OF_FOUR_INT:
+      {
+        int values[4];
+        int maximum;
+        int i;
+
+        for (i = 0; i < 4; i++)
+          values[i] = (int) read_user_argument (f, i + 1);
+        maximum = values[0];
+        for (i = 1; i < 4; i++)
+          if (values[i] > maximum)
+            maximum = values[i];
+        f->eax = maximum;
       }
       break;
 

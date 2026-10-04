@@ -20,6 +20,7 @@ typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 struct child_process;
+struct file;
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
@@ -103,6 +104,7 @@ struct thread
     int exit_status;                     /* Status reported to the parent. */
     struct list open_files;              /* This process's file descriptors. */
     int next_fd;                         /* Next descriptor, starting at 2. */
+    struct file *executable;             /* Running executable held open. */
 #endif
 
     /* Owned by thread.c. */
