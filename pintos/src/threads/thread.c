@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -58,6 +59,9 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+#ifndef USERPROG
+bool thread_prior_aging;
+#endif
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -141,7 +145,25 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+#ifndef USERPROG
+  if (thread_prior_aging && !list_empty (&ready_list))
+  {
+    struct list_elem *e;
+    int64_t now = timer_ticks ();
 
+    for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)){
+      struct thread *ready = list_entry (e, struct thread, elem);
+
+      if (ready->ready_since_tick < now && ready->priority < PRI_MAX)
+        ready->priority++;
+    }
+
+    list_sort (&ready_list, priority_more, NULL);
+
+    if (list_entry (list_front (&ready_list), struct thread, elem)->priority > t->priority)
+      intr_yield_on_return ();
+  }
+#endif
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
@@ -248,6 +270,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+  #ifndef USERPROG
+    t->ready_since_tick = timer_ticks ();
+  #endif
   list_insert_ordered (&ready_list, &t->elem, priority_more, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -319,7 +344,12 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
+  {
+  #ifndef USERPROG
+    cur->ready_since_tick = timer_ticks ();
+  #endif
     list_insert_ordered (&ready_list, &cur->elem, priority_more, NULL);
+  }
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);

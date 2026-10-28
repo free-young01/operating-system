@@ -91,6 +91,9 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+#ifndef USERPROG
+    int64_t ready_since_tick;           /* Tick when added to ready_list */
+#endif
     int64_t wake_tick;                  /* Tick to wake up the thread. */
     struct list_elem allelem;           /* List element for all threads list. */
 
@@ -116,6 +119,9 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+#ifndef USERPROG
+extern bool thread_prior_aging;
+#endif
 
 void thread_init (void);
 void thread_start (void);

@@ -353,7 +353,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiter))
+  if (!list_empty (&cond->waiters))
   {
     struct list_elem *e;
     struct semaphore_elem *waiter;
