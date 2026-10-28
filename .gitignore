@@ -18,9 +18,11 @@ build/
 
 # zip
 *.zip
+*.tar.gz
 
 # documents
 *.pdf
 *.docx
 *.pptx
 *.md
+*.jpg
