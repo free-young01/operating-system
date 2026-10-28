@@ -15,7 +15,7 @@
 #endif
 #if TIMER_FREQ > 1000
 #error TIMER_FREQ <= 1000 recommended
-#endif
+#endif 
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
@@ -24,17 +24,31 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* List of sleeping threads. */
+static struct list sleeping_list;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
+static bool wake_tick_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
+
+static bool 
+wake_tick_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *ta = list_entry (a, struct thread, elem);
+  const struct thread *tb = list_entry (b, struct thread, elem);
+  return ta->wake_tick < tb->wake_tick;
+}
 
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
 timer_init (void) 
 {
+  list_init (&sleeping_list);
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
 }
@@ -89,11 +103,19 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  enum intr_level old_level;
+  struct thread *cur;
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+
+  if (ticks <= 0) return;
+
+  old_level = intr_disable ();
+  cur = thread_current ();
+  cur->wake_tick = ticks + timer_ticks ();
+  list_insert_orderd (&sleeping_list, &cur->elem, wake_tick_less, NULL);
+  thread_block ();
+  intr_set_level (old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +193,14 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+
+  while (!list_empty (&sleeping_list)){
+    struct thread *t = list_entry (list_front (&sleeping_list), struct thread, elem);
+    if (t->wake_tick > ticks) break;
+    list_pop_front (&sleeping_list);
+    thread_unblock (t);
+  }
+
   thread_tick ();
 }
 
