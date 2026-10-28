@@ -113,8 +113,8 @@ timer_sleep (int64_t ticks)
   old_level = intr_disable ();
   cur = thread_current ();
   cur->wake_tick = ticks + timer_ticks ();
-  list_insert_orderd (&sleeping_list, &cur->elem, wake_tick_less, NULL);
-  thread_block ();
+  list_insert_ordered (&sleeping_list, &cur->elem, wake_tick_less, NULL);
+  thread_block ();  
   intr_set_level (old_level);
 }
 
