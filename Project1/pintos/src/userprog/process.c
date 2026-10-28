@@ -7,6 +7,7 @@
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
@@ -206,6 +207,15 @@ process_exit (void)
       child_process_release (list_entry (e, struct child_process, elem));
     }
 
+  syscall_close_all ();
+  if (cur->executable != NULL)
+    {
+      filesys_lock_acquire ();
+      file_close (cur->executable);
+      filesys_lock_release ();
+      cur->executable = NULL;
+    }
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -350,6 +360,7 @@ load (char *file_name, void (**eip) (void), void **esp)
   char *save_ptr;
   off_t file_ofs;
   bool success = false;
+  bool file_lock_held = false;
   int i;
 
   /* Allocate and activate page directory. */
@@ -374,12 +385,15 @@ load (char *file_name, void (**eip) (void), void **esp)
            sizeof thread_current ()->name);
 
   /* Open executable file. */
+  filesys_lock_acquire ();
+  file_lock_held = true;
   file = filesys_open (program_name);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -464,7 +478,14 @@ load (char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  if (file_lock_held)
+    {
+      if (success)
+        t->executable = file;
+      else
+        file_close (file);
+      filesys_lock_release ();
+    }
   if (file_name_copy != NULL)
     palloc_free_page (file_name_copy);
   return success;
