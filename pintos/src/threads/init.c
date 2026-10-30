@@ -383,6 +383,9 @@ usage (void)
 #endif
           "  -rs=SEED           Set random number seed to SEED.\n"
           "  -mlfqs             Use multi-level feedback queue scheduler.\n"
+#ifndef USERPROG
+          "  -aging             Enable priority aging.\n"
+#endif
 #ifdef USERPROG
           "  -ul=COUNT          Limit user memory to COUNT pages.\n"
 #endif

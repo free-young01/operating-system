@@ -21,6 +21,7 @@ typedef int tid_t;
 
 struct child_process;
 struct file;
+struct lock;
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
@@ -91,6 +92,11 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    int base_priority;                  /* Priority without donations. */
+    struct lock *waiting_lock;          /* Lock this thread is acquiring. */
+    struct list held_locks;             /* Locks currently owned. */
+    int nice;                           /* BSD scheduler niceness. */
+    int32_t recent_cpu;                 /* BSD recent CPU, 17.14 fixed point. */
 #ifndef USERPROG
     int64_t ready_since_tick;           /* Tick when added to ready_list */
 #endif
@@ -148,6 +154,8 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_donate_priority (struct thread *, int);
+void thread_refresh_priority (struct thread *);
 
 int thread_get_nice (void);
 void thread_set_nice (int);

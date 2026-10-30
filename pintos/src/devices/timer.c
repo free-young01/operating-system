@@ -199,6 +199,8 @@ timer_interrupt (struct intr_frame *args UNUSED)
     if (t->wake_tick > ticks) break;
     list_pop_front (&sleeping_list);
     thread_unblock (t);
+    if (t->priority > thread_current ()->priority)
+      intr_yield_on_return ();
   }
 
   thread_tick ();
