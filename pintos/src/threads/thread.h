@@ -117,6 +117,11 @@ struct thread
     struct file *executable;             /* Running executable held open. */
 #endif
 
+#ifdef VM
+    struct vm_space *vm;
+    void *user_esp;
+#endif
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

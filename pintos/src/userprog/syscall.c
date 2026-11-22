@@ -18,6 +18,10 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 
+#ifdef VM
+#include "vm/vm.h"
+#endif
+
 /* File descriptors belong to one process; the file system is shared. */
 struct file_descriptor
   {
@@ -120,11 +124,93 @@ validate_user_buffer (const void *buffer, size_t size, bool writable)
        address = (address & ~(uintptr_t) PGMASK) + PGSIZE)
     {
       const void *page_address = (const void *) address;
+#ifdef VM
+      if (!vm_validate (page_address, writable, thread_current ()->user_esp))
+#else
       uint32_t *pd = thread_current ()->pagedir;
       if (pagedir_get_page (pd, page_address) == NULL
           || (writable && !pagedir_is_writable (pd, page_address)))
+#endif
         exit_with_status (-1);
     }
+}
+
+/* Pin only one page at a time, even for buffers larger than user RAM. */
+static bool
+copy_from_user (void *destination, const void *source, size_t size)
+{
+  while (size > 0)
+    {
+      size_t chunk = PGSIZE - pg_ofs (source);
+      if (chunk > size)
+        chunk = size;
+#ifdef VM
+      if (!vm_pin (source, false, thread_current ()->user_esp))
+        return false;
+#else
+      validate_user_buffer (source, chunk, false);
+#endif
+      memcpy (destination, source, chunk);
+#ifdef VM
+      vm_unpin (source);
+#endif
+      source = (const uint8_t *) source + chunk;
+      destination = (uint8_t *) destination + chunk;
+      size -= chunk;
+    }
+  return true;
+}
+
+/* User pages are pinned before the file lock, so file I/O cannot fault. */
+static int
+transfer (int fd, void *buffer, unsigned size, bool write)
+{
+  struct file_descriptor *descriptor = find_file_descriptor (fd);
+  unsigned done = 0;
+  validate_user_buffer (buffer, size, !write);
+  if (size > INT_MAX || ((write ? fd != 1 : fd != 0)
+                         && descriptor == NULL))
+    return -1;
+  while (done < size)
+    {
+      uint8_t *address = (uint8_t *) buffer + done;
+      unsigned chunk = PGSIZE - pg_ofs (address);
+      int count;
+      if (chunk > size - done)
+        chunk = size - done;
+#ifdef VM
+      if (!vm_pin (address, !write, thread_current ()->user_esp))
+        exit_with_status (-1);
+#endif
+      if (write && fd == 1)
+        {
+          putbuf ((const char *) address, chunk);
+          count = chunk;
+        }
+      else if (!write && fd == 0)
+        {
+          unsigned i;
+          for (i = 0; i < chunk; i++)
+            address[i] = input_getc ();
+          count = chunk;
+        }
+      else
+        {
+          filesys_lock_acquire ();
+          count = write ? file_write (descriptor->file, address, chunk)
+                        : file_read (descriptor->file, address, chunk);
+          filesys_lock_release ();
+        }
+#ifdef VM
+      vm_unpin (address);
+#endif
+      if (count < 0)
+        return done == 0 ? -1 : (int) done;
+      done += count;
+      if ((unsigned) count < chunk)
+        break;
+    }
+  return done;
 }
 
 /* Read one 32-bit syscall word, including words crossing a page boundary. */
@@ -139,7 +225,8 @@ read_user_argument (const struct intr_frame *f, unsigned index)
     exit_with_status (-1);
   source = (const void *) (stack + index * sizeof value);
   validate_user_buffer (source, sizeof value, false);
-  memcpy (&value, source, sizeof value);
+  if (!copy_from_user (&value, source, sizeof value))
+    exit_with_status (-1);
   return value;
 }
 
@@ -158,13 +245,11 @@ copy_user_string (const char *source)
     {
       uintptr_t address = first + i;
       if (address < first || address >= (uintptr_t) PHYS_BASE
-          || pagedir_get_page (thread_current ()->pagedir,
-                               (const void *) address) == NULL)
+          || !copy_from_user (&copy[i], (const void *) address, 1))
         {
           palloc_free_page (copy);
           exit_with_status (-1);
         }
-      copy[i] = *(const char *) address;
       if (copy[i] == '\0')
         return copy;
     }
@@ -176,7 +261,11 @@ copy_user_string (const char *source)
 static void
 syscall_handler (struct intr_frame *f)
 {
-  uint32_t call = read_user_argument (f, 0);
+  uint32_t call;
+#ifdef VM
+  thread_current ()->user_esp = f->esp;
+#endif
+  call = read_user_argument (f, 0);
 
   switch (call)
     {
@@ -306,56 +395,12 @@ syscall_handler (struct intr_frame *f)
       break;
 
     case SYS_READ:
-      {
-        int fd = (int) read_user_argument (f, 1);
-        uint8_t *buffer = (uint8_t *) read_user_argument (f, 2);
-        unsigned size = read_user_argument (f, 3);
-        unsigned i;
-
-        validate_user_buffer (buffer, size, true);
-        if (fd == 0)
-          {
-            for (i = 0; i < size; i++)
-              buffer[i] = input_getc ();
-            f->eax = size;
-          }
-        else
-          {
-            struct file_descriptor *descriptor = find_file_descriptor (fd);
-            f->eax = -1;
-            if (descriptor != NULL && size <= INT_MAX)
-              {
-                filesys_lock_acquire ();
-                f->eax = file_read (descriptor->file, buffer, size);
-                filesys_lock_release ();
-              }
-          }
-      }
-      break;
-
     case SYS_WRITE:
       {
         int fd = (int) read_user_argument (f, 1);
-        const void *buffer = (const void *) read_user_argument (f, 2);
+        void *buffer = (void *) read_user_argument (f, 2);
         unsigned size = read_user_argument (f, 3);
-
-        validate_user_buffer (buffer, size, false);
-        if (fd == 1)
-          {
-            putbuf (buffer, size);
-            f->eax = size;
-          }
-        else
-          {
-            struct file_descriptor *descriptor = find_file_descriptor (fd);
-            f->eax = -1;
-            if (descriptor != NULL && size <= INT_MAX)
-              {
-                filesys_lock_acquire ();
-                f->eax = file_write (descriptor->file, buffer, size);
-                filesys_lock_release ();
-              }
-          }
+        f->eax = transfer (fd, buffer, size, call == SYS_WRITE);
       }
       break;
 
