@@ -5,9 +5,9 @@
 - 기준: `Project3/Proj3.pptx`와 `Project3/document.docx`, 제공 Pintos 문서·소스·테스트.
 - 구현: SPT, 지연 적재, 스택 확장, Second Chance, 스왑, 파일 매핑, 시스템 콜 연동, 종료 정리.
 - 로컬 검증: WSL Ubuntu / GCC 13.3.0 / GNU Make 4.3에서 `vm`, `userprog`, `threads` 빌드. 변경 C 파일의 VM 사용·미사용 구성에 경고를 오류로 취급하는 문법 검사 수행.
-- **실행 테스트는 아직 수행하지 않았다.** 로컬에 QEMU가 없다. 빌드 성공은 페이지 교체·동시 실행의 정확성이나 채점 테스트 통과를 뜻하지 않는다.
+- **서버 실행 검증 완료:** 구현 커밋 `2d1cdad`를 서버에 반영하고 clean·재빌드한 뒤 `vm` 구성의 `make check`에서 **`All 113 tests passed.`**를 확인했다. 지정 16개와 mmap·userprog·filesys/base 테스트를 포함한다. 별도 threads 커널의 실행 결과는 포함하지 않는다.
 - 완성 보고서 본문: `Project3/20221599.docx`. 표지는 기존 Project2 보고서의 이수영 / 20221599 / 박성용을 사용했다. 원본 `document.docx`는 보존했다.
-- **보고서의 IV.C에는 서버 실행 결과와 실제 화면 캡처를 추가해야 한다.** 미실행 결과를 PASS로 기재하지 않았다.
+- **보고서 IV.C에 서버 113개 통과 결과를 반영했다.** 실제 결과 화면 캡처 두 장은 사용자가 표시된 위치에 삽입한다.
 
 ## 1. 구현 범위와 파일
 
@@ -116,7 +116,7 @@ selected=$(printf 'tests/vm/%s ' "${tests[@]}")
 make -C pintos/src/vm check TESTS="$selected" 2>&1 | tee Project3/vm-required-check.log
 ```
 
-정상 완료의 기준은 **`All 16 tests passed.`**이다. 예상 문구이며 아직 관찰한 결과가 아니다. 잘못된 접근 테스트는 자식 프로그램이 `exit(-1)`로 종료되어야 PASS이므로, 프로그램 종료 자체를 실패로 오해하지 않는다.
+위 16개만 선택한 실행의 정상 완료 기준은 **`All 16 tests passed.`**이다. 이번에 확인한 결과는 아래 4절의 전체 실행인 **`All 113 tests passed.`**이며, 지정 16개도 포함하여 모두 통과했다. 잘못된 접근 테스트는 자식 프로그램이 `exit(-1)`로 종료되어야 PASS이므로, 프로그램 종료 자체를 실패로 오해하지 않는다.
 
 테스트 규칙은 VM 구성에서 임시 4 MiB 스왑 디스크를 자동으로 붙인다. `make check`에는 별도로 `swap.dsk`를 만들 필요가 없다. 단독으로 Pintos를 실행할 때는 `--swap-size=4` 등 실행 옵션이 필요하다. 병합·셔플 테스트는 다른 테스트보다 오래 걸리며 제공 규칙에 일부 300~600초 제한이 있다.
 
