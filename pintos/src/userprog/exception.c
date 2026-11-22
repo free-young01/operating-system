@@ -5,11 +5,11 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
-/* Number of page faults processed. */
 #ifdef VM
 #include "vm/vm.h"
 #endif
 
+/* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);

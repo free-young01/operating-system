@@ -148,7 +148,9 @@ copy_from_user (void *destination, const void *source, size_t size)
       if (!vm_pin (source, false, thread_current ()->user_esp))
         return false;
 #else
-      validate_user_buffer (source, chunk, false);
+      if (source == NULL || !is_user_vaddr (source)
+          || pagedir_get_page (thread_current ()->pagedir, source) == NULL)
+        return false;
 #endif
       memcpy (destination, source, chunk);
 #ifdef VM
@@ -161,6 +163,25 @@ copy_from_user (void *destination, const void *source, size_t size)
   return true;
 }
 
+/* Keep short console writes atomic even when the source crosses a page. */
+static int
+write_console (const void *buffer, unsigned size)
+{
+  char copy[512];
+  unsigned done = 0;
+  while (done < size)
+    {
+      unsigned chunk = size - done;
+      if (chunk > sizeof copy)
+        chunk = sizeof copy;
+      if (!copy_from_user (copy, (const uint8_t *) buffer + done, chunk))
+        exit_with_status (-1);
+      putbuf (copy, chunk);
+      done += chunk;
+    }
+  return done;
+}
+
 /* User pages are pinned before the file lock, so file I/O cannot fault. */
 static int
 transfer (int fd, void *buffer, unsigned size, bool write)
@@ -171,6 +192,8 @@ transfer (int fd, void *buffer, unsigned size, bool write)
   if (size > INT_MAX || ((write ? fd != 1 : fd != 0)
                          && descriptor == NULL))
     return -1;
+  if (write && fd == 1)
+    return write_console (buffer, size);
   while (done < size)
     {
       uint8_t *address = (uint8_t *) buffer + done;
@@ -182,12 +205,7 @@ transfer (int fd, void *buffer, unsigned size, bool write)
       if (!vm_pin (address, !write, thread_current ()->user_esp))
         exit_with_status (-1);
 #endif
-      if (write && fd == 1)
-        {
-          putbuf ((const char *) address, chunk);
-          count = chunk;
-        }
-      else if (!write && fd == 0)
+      if (!write && fd == 0)
         {
           unsigned i;
           for (i = 0; i < chunk; i++)
