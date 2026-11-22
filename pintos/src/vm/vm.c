@@ -54,6 +54,7 @@ struct vm_space
   };
 
 /* All frame/SPT changes precede file-system locking, never the reverse. */
+/* shortcut: VM I/O is serialized; split locks if concurrent faults bottleneck. */
 static struct lock vm_lock;
 static struct list frames;
 static struct list_elem *clock_hand;
