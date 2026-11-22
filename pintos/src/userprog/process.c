@@ -469,14 +469,18 @@ load (char *file_name, void (**eip) (void), void **esp)
                   read_bytes = 0;
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
+#ifdef VM
               /* VM allocation can evict a page and acquire the file lock. */
               filesys_lock_release ();
               file_lock_held = false;
+#endif
               if (!load_segment (file, file_page, (void *) mem_page,
                                  read_bytes, zero_bytes, writable))
                 goto done;
+#ifdef VM
               filesys_lock_acquire ();
               file_lock_held = true;
+#endif
             }
           else
             goto done;

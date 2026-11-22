@@ -404,6 +404,22 @@ syscall_handler (struct intr_frame *f)
       }
       break;
 
+#ifdef VM
+    case SYS_MMAP:
+      {
+        int fd = (int) read_user_argument (f, 1);
+        void *address = (void *) read_user_argument (f, 2);
+        struct file_descriptor *descriptor = find_file_descriptor (fd);
+        f->eax = descriptor != NULL ? vm_mmap (descriptor->file, address) : -1;
+      }
+      break;
+
+    case SYS_MUNMAP:
+      if (!vm_munmap ((int) read_user_argument (f, 1)))
+        exit_with_status (-1);
+      break;
+#endif
+
     case SYS_SEEK:
       {
         int fd = (int) read_user_argument (f, 1);

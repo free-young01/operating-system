@@ -16,5 +16,7 @@ bool vm_add_file (void *upage, struct file *, off_t offset,
 bool vm_validate (const void *address, bool write, const void *esp);
 bool vm_pin (const void *address, bool write, const void *esp);
 void vm_unpin (const void *address);
+int vm_mmap (struct file *, void *address);
+bool vm_munmap (int id);
 
 #endif /* vm/vm.h */
